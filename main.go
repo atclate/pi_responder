@@ -40,6 +40,7 @@ var (
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 	}
+	gpioMap = make(map[string]Pin)
 )
 
 func readFileIfModified(lastMod time.Time) ([]byte, time.Time, error) {
@@ -164,6 +165,7 @@ func main() {
 	filename = flag.Args()[0]
 	http.HandleFunc("/", serveHome)
 	http.HandleFunc("/ws", serveWs)
+	InitGpioPoll()
 	checkFs(filename)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatal(err)
