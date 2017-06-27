@@ -22,7 +22,7 @@ func InitGpioPoll() {
 	initGpioPort("23", "yellow")
 	initGpioPort("24", "blue")
 	initGpioPort("25", "red")
-	change := make(chan Pin)
+	//change := make(chan Pin)
 	go func() {
 		for {
 			for k, p := range gpioMap {
@@ -36,15 +36,15 @@ func InitGpioPoll() {
 					fmt.Printf("pin %v changed from %v to %v", k, p.value, string(b))
 					p.value = string(b)
 					gpioMap[k] = p
-					change <- p
+					//change <- p
 				}
 			}
 		}
 	}()
-	for {
+	/*for {
 		pin := <-change
 		fmt.Printf("handle pin change here: Pin = %V\n", pin)
-	}
+	}*/
 }
 
 type Pin struct {

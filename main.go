@@ -166,7 +166,7 @@ func main() {
 	http.HandleFunc("/", serveHome)
 	http.HandleFunc("/ws", serveWs)
 	InitGpioPoll()
-	checkFs(filename)
+	//checkFs(filename)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatal(err)
 	}
