@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/websocket"
 )
 
@@ -163,9 +164,39 @@ func main() {
 	filename = flag.Args()[0]
 	http.HandleFunc("/", serveHome)
 	http.HandleFunc("/ws", serveWs)
+	checkFs(filename)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func checkFs(filename string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case event := <-watcher.Events:
+				log.Println("event:", event)
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					log.Println("modified file:", event.Name)
+				}
+			case err := <-watcher.Errors:
+				log.Println("error:", err)
+				done <- true
+			}
+		}
+	}()
+
+	err = watcher.Add(filename)
+	if err != nil {
+		log.Fatal(err)
+	}
+	<-done
 }
 
 const homeHTML = `<!DOCTYPE html>
