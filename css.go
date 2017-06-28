@@ -30,9 +30,9 @@ const (
     float: left;
 }
 
-dy {
+/*body {
     text-align: center;
-}
+}*/
 
 .button {
     display: inline-block;
@@ -91,6 +91,10 @@ dy {
 }
 .left {
 	float: left;
+}
+
+#winner_name {
+	font-size: 70px;
 }
 
 `

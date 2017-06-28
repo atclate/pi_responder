@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	PIN_LOCATION = "%v"
-	//PIN_LOCATION = "/sys/class/gpio/gpio%v/value"
+	//PIN_LOCATION = "%v"
+	PIN_LOCATION = "/sys/class/gpio/gpio%v/value"
 )
 
 var (

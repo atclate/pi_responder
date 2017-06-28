@@ -9,10 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
@@ -51,21 +49,6 @@ type Button struct {
 	Updated time.Time
 }
 
-func readFileIfModified(lastMod time.Time) ([]byte, time.Time, error) {
-	fi, err := os.Stat(filename)
-	if err != nil {
-		return nil, lastMod, err
-	}
-	if !fi.ModTime().After(lastMod) {
-		return nil, lastMod, nil
-	}
-	p, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return nil, fi.ModTime(), err
-	}
-	return p, fi.ModTime(), nil
-}
-
 func reader(ws *websocket.Conn) {
 	defer ws.Close()
 	ws.SetReadLimit(512)
@@ -80,37 +63,13 @@ func reader(ws *websocket.Conn) {
 }
 
 func writer(ws *websocket.Conn, lastMod time.Time) {
-	lastError := ""
 	pingTicker := time.NewTicker(pingPeriod)
-	fileTicker := time.NewTicker(filePeriod)
 	defer func() {
 		pingTicker.Stop()
-		fileTicker.Stop()
 		ws.Close()
 	}()
 	for {
 		select {
-		case <-fileTicker.C:
-			var p []byte
-			var err error
-
-			p, lastMod, err = readFileIfModified(lastMod)
-
-			if err != nil {
-				if s := err.Error(); s != lastError {
-					lastError = s
-					p = []byte(lastError)
-				}
-			} else {
-				lastError = ""
-			}
-
-			if p != nil {
-				ws.SetWriteDeadline(time.Now().Add(writeWait))
-				if err := ws.WriteMessage(websocket.TextMessage, p); err != nil {
-					return
-				}
-			}
 		case pin := <-buttonPush:
 			ws.SetWriteDeadline(time.Now().Add(writeWait))
 			ba, err := json.Marshal(pin)
@@ -154,11 +113,8 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	p, lastMod, err := readFileIfModified(time.Time{})
-	if err != nil {
-		p = []byte(err.Error())
-		lastMod = time.Unix(0, 0)
-	}
+	p := fmt.Sprintf("Please visit %v to play.", r.Host)
+	lastMod := time.Unix(0, 0)
 	var v = struct {
 		Host    string
 		Data    string
@@ -262,23 +218,32 @@ const homeHTML = `<!DOCTYPE html>
     </head>
     <body>
 	<div id="winner" class="center" style="width: 100%; min-height: 350px; text-align: left">
-	<span id="winner_name" class="left"></span>
+	<span id="winner_name" class="center"></span>
 	</div>
         <pre id="fileData" class="left">{{.Data}}</pre>
         <script type="text/javascript">
             (function() {
                 var data = document.getElementById("fileData");
                 var conn = new WebSocket("ws://{{.Host}}/ws?lastMod={{.LastMod}}");
+				var lastWin = null;
                 conn.onclose = function(evt) {
                     data.textContent = 'Connection closed';
                 }
                 conn.onmessage = function(evt) {
                     console.log('file updated');
+                    console.log(evt);
 					append = data.textContent;
-					j = JSON.parse(data.textContent);
-					$("#winner_name").textContent = j["Name"];
-					$("#winner").css('background-color', j["Color"]);
-                    data.textContent = evt.data + "\n" +append;
+					j = JSON.parse(evt.data);
+					msec_diff_min = 5 * 1000; // 5 seconds
+					if (lastWin == null || (new Date().getTime() - lastWin > msec_diff_min)) {
+					    lastWin = new Date().getTime();
+					    $("#winner_name").text(j["Name"] + " won!");
+					    $("#winner").css('background-color', j["Color"]);
+
+                        data.textContent = evt.data + " - WON\n" +append;
+					} else {
+                        data.textContent = evt.data + "\n" +append;
+					}
                 }
             })();
         </script>
