@@ -5,7 +5,9 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
+	"fmt"
 	"html/template"
 	"io/ioutil"
 	"log"
@@ -14,7 +16,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/gorilla/websocket"
 )
 
@@ -33,15 +34,22 @@ const (
 )
 
 var (
-	addr      = flag.String("addr", ":8080", "http service address")
-	homeTempl = template.Must(template.New("").Parse(homeHTML))
-	filename  string
-	upgrader  = websocket.Upgrader{
+	addr        = flag.String("addr", ":8080", "http service address")
+	homeTempl   = template.Must(template.New("").Parse(homeHTML))
+	clientTempl = template.Must(template.New("").Funcs(template.FuncMap{"printTempl": PrintTempl}).Parse(clientHTML))
+	filename    string
+	upgrader    = websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 	}
-	gpioMap = make(map[string]Pin)
+	buttonList = make([]Button, 0)
 )
+
+type Button struct {
+	Name    string
+	Color   string
+	Updated time.Time
+}
 
 func readFileIfModified(lastMod time.Time) ([]byte, time.Time, error) {
 	fi, err := os.Stat(filename)
@@ -103,6 +111,16 @@ func writer(ws *websocket.Conn, lastMod time.Time) {
 					return
 				}
 			}
+		case pin := <-buttonPush:
+			ws.SetWriteDeadline(time.Now().Add(writeWait))
+			ba, err := json.Marshal(pin)
+			if err != nil {
+				return
+			}
+			if err := ws.WriteMessage(websocket.TextMessage, ba); err != nil {
+				return
+			}
+
 		case <-pingTicker.C:
 			ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := ws.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
@@ -131,10 +149,6 @@ func serveWs(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveHome(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.Error(w, "Not found", 404)
-		return
-	}
 	if r.Method != "GET" {
 		http.Error(w, "Method not allowed", 405)
 		return
@@ -157,57 +171,100 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
 	homeTempl.Execute(w, &v)
 }
 
+func serveClient(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", 405)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	var v = struct {
+		Host    string
+		LastMod string
+		Circles []Button
+	}{
+		r.Host,
+		strconv.FormatInt(time.Now().UnixNano(), 16),
+		buttonList,
+	}
+	clientTempl.Execute(w, &v)
+}
+
+func serveSubmit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+	}
+
+	err := r.ParseForm()
+	if err != nil {
+		panic(err)
+	}
+
+	color := r.PostFormValue("color")
+	name := r.PostFormValue("name")
+
+	pin := Pin{Name: name, Value: "1", Color: color, Updated: time.Now()}
+	buttonPush <- pin
+
+	var v = struct {
+		Host    string
+		LastMod string
+	}{
+		r.Host,
+		strconv.FormatInt(time.Now().UnixNano(), 16),
+	}
+	clientTempl.Execute(w, &v)
+}
+
+func serveJquery(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	fmt.Fprint(w, AJAX_JS)
+}
+
+func serveCss(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	fmt.Fprint(w, CSS)
+}
+
+func initButtons() {
+	buttonList = append(buttonList, Button{Name: "Blue", Color: "blue"})
+	buttonList = append(buttonList, Button{Name: "Red", Color: "red"})
+	buttonList = append(buttonList, Button{Name: "Yellow", Color: "yellow"})
+	buttonList = append(buttonList, Button{Name: "Green", Color: "Green"})
+}
+
 func main() {
 	flag.Parse()
 	if flag.NArg() != 1 {
-		log.Fatal("filename not specified")
+		log.Println("filename not specified")
+	} else {
+		filename = flag.Args()[0]
 	}
-	filename = flag.Args()[0]
-	http.HandleFunc("/", serveHome)
-	http.HandleFunc("/ws", serveWs)
+	initButtons()
 	InitGpioPoll()
-	//checkFs(filename)
+
+	http.HandleFunc("/host", serveHome)
+	http.HandleFunc("/ws", serveWs)
+	http.HandleFunc("/", serveClient)
+	http.HandleFunc("/submit", serveSubmit)
+	http.HandleFunc("/jquery-3.2.1.min.js", serveJquery)
+	http.HandleFunc("/styles.css", serveCss)
 	if err := http.ListenAndServe(*addr, nil); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func checkFs(filename string) {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	done := make(chan bool)
-	go func() {
-		for {
-			select {
-			case event := <-watcher.Events:
-				log.Println("event:", event)
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					log.Println("modified file:", event.Name)
-				}
-			case err := <-watcher.Errors:
-				log.Println("error:", err)
-				done <- true
-			}
-		}
-	}()
-
-	err = watcher.Add(filename)
-	if err != nil {
-		log.Fatal(err)
-	}
-	<-done
-}
-
 const homeHTML = `<!DOCTYPE html>
 <html lang="en">
+<script src="jquery-3.2.1.min.js"></script>
+<link rel="stylesheet" type="text/css" href="styles.css" media="all"></link>
     <head>
         <title>WebSocket Example</title>
     </head>
     <body>
-        <pre id="fileData">{{.Data}}</pre>
+	<div id="winner" class="center" style="width: 100%; min-height: 350px; text-align: left">
+	<span id="winner_name" class="left"></span>
+	</div>
+        <pre id="fileData" class="left">{{.Data}}</pre>
         <script type="text/javascript">
             (function() {
                 var data = document.getElementById("fileData");
@@ -217,10 +274,63 @@ const homeHTML = `<!DOCTYPE html>
                 }
                 conn.onmessage = function(evt) {
                     console.log('file updated');
-                    data.textContent = evt.data;
+					append = data.textContent;
+					j = JSON.parse(data.textContent);
+					$("#winner_name").textContent = j["Name"];
+					$("#winner").css('background-color', j["Color"]);
+                    data.textContent = evt.data + "\n" +append;
                 }
             })();
         </script>
+    </body>
+</html>
+`
+
+func PrintTempl(text string) string {
+	return text
+}
+
+const clientHTML = `<!DOCTYPE html>
+<html lang="en">
+<script src="jquery-3.2.1.min.js"></script>
+<link rel="stylesheet" type="text/css" href="styles.css" media="all"></link>
+    <head>
+        <title>Responder</title>
+    </head>
+    <body>
+		<form id="respond" action="/submit" method="POST">
+		  Color:<br>
+		<div class="center">
+
+		{{range .Circles}}<div id="{{ .Name }}" class="circle not-selected" color="{{.Color}}" style="background-color: {{ .Color}};"></div>{{else}}<div><strong>no rows</strong></div>{{end}}
+		
+		</div>
+		
+			<br>
+		  Name:<br>
+		    <input id="name" type="text" name="name" value="">
+		    <br><br>
+		  <a href="#" id="submit" class="button" type="button" value="Respond!">
+		    <span>Respond!</span>
+		  </a>
+	  	</form> 
+<script type="text/javascript">
+var selected = $("#Blue");
+$(".button").css("background-color", selected.attr("color"));
+$(".circle").on('click', function(e) {
+		selected = $(this)
+		$(".selected").toggleClass('selected not-selected');
+		$(".button").css("background-color", selected.attr("color"));
+		$(this).toggleClass('not-selected selected');
+});
+selected.toggleClass('not-selected selected');
+
+$("#submit").on('click', function(e) {
+  $.post( "/submit", {"color": selected.attr("color"), "name": $('#name').val()}, function( data ) {
+    $( ".result" ).html( data );
+  });
+});
+</script>
     </body>
 </html>
 `
